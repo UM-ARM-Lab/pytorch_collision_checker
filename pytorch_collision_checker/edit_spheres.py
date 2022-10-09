@@ -8,19 +8,20 @@ from typing import Dict
 import numpy as np
 from PyQt5 import QtWidgets
 from PyQt5.QtWidgets import QTreeWidgetItem
+from dm_control import mujoco
 
 import pytorch_kinematics as pk
 import rospy
 from geometry_msgs.msg import Pose
 from pytorch_collision_checker.basic_3d_pose_marker import Basic3DPoseInteractiveMarker
-from pytorch_collision_checker.collision_visualizer import CollisionVisualizer
+from pytorch_collision_checker.collision_visualizer import CollisionVisualizer, MujocoVisualizer
 from pytorch_collision_checker.sphere_editor import Ui_MainWindow
 from pytorch_kinematics import Chain
 from visualization_msgs.msg import InteractiveMarkerFeedback
 
 
 class EditSphere:
-    def __init__(self, outfilename, data: Dict, chain: Chain):
+    def __init__(self, model_filename: pathlib.Path, outfilename: pathlib.Path, data: Dict, chain: Chain):
         self.outfilename = outfilename
         self.data = data
         self.chain = chain
@@ -28,7 +29,9 @@ class EditSphere:
             np.zeros(len(self.chain.get_joint_parameter_names(exclude_fixed=True))))
 
         self.cc_viz = CollisionVisualizer()
-        self.i = Basic3DPoseInteractiveMarker(cb=self.im_cb)
+        self.mj_viz = MujocoVisualizer()
+        self.physics = mujoco.Physics.from_xml_string(model_filename.open().read())
+        self.i = Basic3DPoseInteractiveMarker(cb=self.im_cb, frame_id='world')
 
         if 'spheres' not in self.data:
             self.data['spheres'] = {}
@@ -205,6 +208,7 @@ class EditSphere:
 
     def publish_spheres(self):
         self.cc_viz.viz_from_spheres_dict(self.data['spheres'])
+        self.mj_viz.viz(self.physics)
 
 
 def main():
@@ -227,7 +231,7 @@ def main():
     data['model filename'] = args.model_filename.absolute().as_posix()
 
     chain = pk.build_chain_from_mjcf(args.model_filename.open().read())
-    EditSphere(outfilename, data, chain)
+    EditSphere(args.model_filename, outfilename, data, chain)
 
 
 if __name__ == '__main__':

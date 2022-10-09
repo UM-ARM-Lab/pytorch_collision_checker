@@ -7,9 +7,9 @@ from interactive_markers.interactive_marker_server import *
 from visualization_msgs.msg import *
 
 
-def make_interactive_marker(name: str, position: Point):
+def make_interactive_marker(name: str, position: Point, frame_id):
     imarker = InteractiveMarker()
-    imarker.header.frame_id = "robot_root"
+    imarker.header.frame_id = frame_id
     imarker.pose.position = position
     imarker.pose.orientation.w = 1
     imarker.scale = 0.8
@@ -53,13 +53,12 @@ def make_interactive_marker(name: str, position: Point):
 
 
 class Basic3DPoseInteractiveMarker:
-    def __init__(self,
-                 cb):
+    def __init__(self, cb, frame_id):
         position = Point(0, 0, 0)
         self.server = InteractiveMarkerServer("basic_3d_imarkers")
 
         self.marker_name = 'my_imarker'
-        self.imarker = make_interactive_marker(self.marker_name, position)
+        self.imarker = make_interactive_marker(self.marker_name, position, frame_id)
         self.server.insert(self.imarker, self.on_feedback)
         self.cb = cb
 
