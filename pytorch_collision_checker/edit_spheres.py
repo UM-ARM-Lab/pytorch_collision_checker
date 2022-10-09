@@ -142,7 +142,7 @@ class EditSphere:
 
     def on_save(self):
         with self.outfilename.open("w") as f:
-            json.dump(self.data, f)
+            json.dump(self.data, f, indent=2)
 
     def on_remove(self):
         item = self.ui.spheres_tree.currentItem()

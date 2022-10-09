@@ -5,6 +5,7 @@ from typing import Optional, List, Tuple, Dict
 import numpy as np
 import torch
 
+from pytorch_collision_checker.sdf import SDF
 from pytorch_kinematics import Chain, SerialChain, Transform3d
 from pytorch_kinematics.frame import Frame, Link, Joint
 
@@ -89,20 +90,22 @@ class CollisionChecker:
 
     def __init__(self, chain: Chain,
                  spheres: Dict,
-                 env: Optional[torch.tensor] = None,
+                 sdf: Optional[SDF] = None,
                  ignore_collision_pairs: List[Tuple[str, str]] = None):
         """
 
         Args:
             chain:
             spheres:
-            env:
+            sdf:
             ignore_collision_pairs: a list of links where collision is allowed (meaning it is ignored)
         """
         if isinstance(chain, SerialChain):
             raise NotImplementedError("only Chain supported")
         self.chain = deepcopy(chain)
-        self.env = env
+        self.dtype = self.chain.dtype
+        self.device = self.chain.device
+        self.sdf = sdf
         self.radii, self.repeats, self.sphere_idx_to_link_idx = get_radii(chain, spheres)
         self.link_names = self.chain.get_link_names()
         self.n_spheres = self.radii.shape[0]
@@ -135,45 +138,51 @@ class CollisionChecker:
                                            joint=joint))
 
     @handle_batch_input(n=2)
-    def check_collision(self, joint_positions, return_all_pairs=False):
-        """
+    def get_all_self_collision_pairs(self, joint_positions):
+        sphere_positions = self.compute_sphere_positions(joint_positions)
+        in_self_collision = self.compute_self_distance_matrix(sphere_positions)
+        batch_indices, a_indices, b_indices = torch.where(in_self_collision)
+        pairs = []
+        for batch_idx, sphere_a_idx, sphere_b_idx in torch.stack([batch_indices, a_indices, b_indices], dim=-1):
+            link_a_idx = self.sphere_idx_to_link_idx[sphere_a_idx]
+            link_b_idx = self.sphere_idx_to_link_idx[sphere_b_idx]
+            link_a_name = self.link_names[link_a_idx]
+            link_b_name = self.link_names[link_b_idx]
+            pair = (link_a_name, link_b_name)
+            pair_reverse = (link_b_name, link_a_name)
+            if pair not in pairs and pair_reverse not in pairs:
+                pairs.append(pair)
+        return pairs
 
-        Args:
-            joint_positions: [b, n_joints]
+    @handle_batch_input(n=2)
+    def check_collision(self, joint_positions):
+        sphere_positions = self.compute_sphere_positions(joint_positions)
+        in_self_collision = self.compute_self_distance_matrix(sphere_positions)
+        in_collision_any = in_self_collision.any(dim=2)
 
-        Returns:
-            boolean tensor [b, 1]
+        if self.sdf is not None:
+            d_to_env = self.sdf.get_signed_distance(sphere_positions)
+            in_env_collision = d_to_env < self.radii[None]
+            in_collision_any = torch.logical_or(in_collision_any, in_env_collision.any(dim=1))
 
-        """
+        return in_collision_any
+
+    @handle_batch_input(n=2)
+    def compute_self_distance_matrix(self, sphere_positions):
+        d_to_self = pairwise_distances(sphere_positions)
+        d_to_self_ignored = d_to_self + self.ignored_collision_matrix * 999
+        in_self_collision = d_to_self_ignored < self.radii_matrix
+        return in_self_collision
+
+    @handle_batch_input(n=2)
+    def compute_sphere_positions(self, joint_positions):
         transforms = self.chain.forward_kinematics(joint_positions)
-
         sphere_positions = []
         for k, t in transforms.items():
             if 'sphere' in k:
                 sphere_positions.append(t.get_matrix()[:, :3, 3])
-
         sphere_positions_vec = torch.stack(sphere_positions, dim=1)
-        # TODO: add frames to the chain to represent all the spheres, otherwise we're re-doing work here
-        d = pairwise_distances(sphere_positions_vec)
-        d_ignored = d + self.ignored_collision_matrix * 999
-        in_collision = d_ignored < self.radii_matrix
-        in_collision_any = in_collision.any(dim=2)
-
-        if return_all_pairs:
-            batch_indices, a_indices, b_indices = torch.where(in_collision)
-            pairs = []
-            for batch_idx, sphere_a_idx, sphere_b_idx in torch.stack([batch_indices, a_indices, b_indices], dim=-1):
-                link_a_idx = self.sphere_idx_to_link_idx[sphere_a_idx]
-                link_b_idx = self.sphere_idx_to_link_idx[sphere_b_idx]
-                link_a_name = self.link_names[link_a_idx]
-                link_b_name = self.link_names[link_b_idx]
-                pair = (link_a_name, link_b_name)
-                pair_reverse = (link_b_name, link_a_name)
-                if pair not in pairs and pair_reverse not in pairs:
-                    pairs.append(pair)
-            return pairs
-        else:
-            return in_collision_any
+        return sphere_positions_vec
 
 
 def get_default_ignores(chain: Chain, spheres: Dict):
@@ -184,7 +193,7 @@ def get_default_ignores(chain: Chain, spheres: Dict):
     pair_count_map = {}
     for _ in range(n_config_samples):
         n_joints = len(chain.get_joint_parameter_names())
-        colliding_pairs = cc.check_collision(rng.uniform(low, high, size=n_joints), return_all_pairs=True)
+        colliding_pairs = cc.get_all_self_collision_pairs(rng.uniform(low, high, size=n_joints))
         for pair in colliding_pairs:
             if pair not in pair_count_map:
                 pair_count_map[pair] = 0

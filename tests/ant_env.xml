@@ -1,0 +1,10 @@
+<mujoco model="ant">
+  <worldbody>
+    <body name="floor" pos="0 0 0">
+      <geom name="floor" pos="0 0 0" size="1 1 0.05" type="box"/>
+    </body>
+    <body name="wall" pos="1 0 1">
+      <geom name="wall" pos="0 0 0" size="0.05 1 1" type="box"/>
+    </body>
+  </worldbody>
+</mujoco>

@@ -1,1 +1,144 @@
-{"spheres": {"torso": [{"position": [8.940696716308594e-08, 0.0, 0.7480136752128601], "radius": 0.253}], "front_left_leg": [{"position": [0.21142759919166565, 0.19504854083061218, 0.7947827577590942], "radius": 0.125}, {"position": [0.3215961158275604, 0.3297969698905945, 0.7261252403259277], "radius": 0.125}], "front_right_leg": [{"position": [0, 0, 0], "radius": 0.125}], "left_back_leg": [{"position": [0, 0, 0], "radius": 0.125}], "right_back_leg": [{"position": [0, 0, 0], "radius": 0.125}], "aux_1": [{"position": [0, 0, 0], "radius": 0.125}], "aux_2": [{"position": [0, 0, 0], "radius": 0.125}], "aux_3": [{"position": [0, 0, 0], "radius": 0.125}], "aux_4": [{"position": [0, 0, 0], "radius": 0.125}], "front_left_foot": [{"position": [0, 0, 0], "radius": 0.125}], "front_right_foot": [{"position": [0, 0, 0], "radius": 0.125}], "left_back_foot": [{"position": [0, 0, 0], "radius": 0.125}], "right_back_foot": [{"position": [8.288770914077759e-08, 0.0, 0.6957477331161499], "radius": 0.125}]}, "created": "10/09/2022, 10:09:08", "model filename": "/home/peter/catkin_ws/src/pytorch_collision_checker/tests/ant.xml"}
+{
+  "spheres": {
+    "torso": [
+      {
+        "position": [
+          8.940696716308594e-08,
+          0.0,
+          0.7480136752128601
+        ],
+        "radius": 0.253
+      }
+    ],
+    "front_left_leg": [
+      {
+        "position": [
+          0.21142759919166565,
+          0.19504854083061218,
+          0.7947827577590942
+        ],
+        "radius": 0.125
+      },
+      {
+        "position": [
+          0.3215961158275604,
+          0.3297969698905945,
+          0.7261252403259277
+        ],
+        "radius": 0.125
+      }
+    ],
+    "front_right_leg": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "left_back_leg": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "right_back_leg": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "aux_1": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "aux_2": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "aux_3": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "aux_4": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "front_left_foot": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "front_right_foot": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "left_back_foot": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "right_back_foot": [
+      {
+        "position": [
+          8.288770914077759e-08,
+          0.0,
+          0.6957477331161499
+        ],
+        "radius": 0.125
+      }
+    ]
+  },
+  "created": "10/09/2022, 10:14:15",
+  "model filename": "/home/peter/catkin_ws/src/pytorch_collision_checker/tests/ant.xml"
+}
