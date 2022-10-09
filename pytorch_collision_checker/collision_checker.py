@@ -1,10 +1,12 @@
 import functools
-from typing import Optional, List, Tuple
+from copy import deepcopy
+from typing import Optional, List, Tuple, Dict
 
 import numpy as np
 import torch
 
-from pytorch_kinematics import Chain, SerialChain
+from pytorch_kinematics import Chain, SerialChain, Transform3d
+from pytorch_kinematics.frame import Frame, Link, Joint
 
 
 def is_tensor_like(x):
@@ -63,38 +65,74 @@ def pairwise_distances(a):
     return dist.sqrt()
 
 
+def get_radii(chain, spheres):
+    radii = []
+    repeats = []
+    sphere_idx_to_link_idx = []
+    for link_idx, link_name in enumerate(chain.get_link_names()):
+        if link_name in spheres:
+            spheres_for_link = spheres[link_name]
+            repeats.append(len(spheres_for_link))
+            for sphere_for_link in spheres_for_link:
+                sphere_idx_to_link_idx.append(link_idx)
+                radii.append(sphere_for_link["radius"])
+        else:
+            repeats.append(1)
+            radii.append(0)  # FIXME: won't actually prevent collision from being detected
+    radii = torch.tensor(radii, dtype=chain.dtype, device=chain.device)
+    repeats = torch.tensor(repeats, dtype=torch.int, device=chain.device)
+    sphere_idx_to_link_idx = torch.tensor(sphere_idx_to_link_idx, dtype=torch.int, device=chain.device)
+    return radii, repeats, sphere_idx_to_link_idx
+
+
 class CollisionChecker:
 
     def __init__(self, chain: Chain,
-                 radii: torch.tensor,
+                 spheres: Dict,
                  env: Optional[torch.tensor] = None,
                  ignore_collision_pairs: List[Tuple[str, str]] = None):
         """
 
         Args:
             chain:
-            radii:
+            spheres:
             env:
             ignore_collision_pairs: a list of links where collision is allowed (meaning it is ignored)
         """
         if isinstance(chain, SerialChain):
             raise NotImplementedError("only Chain supported")
-        self.chain = chain
+        self.chain = deepcopy(chain)
         self.env = env
-        self.radii = radii
+        self.radii, self.repeats, self.sphere_idx_to_link_idx = get_radii(chain, spheres)
         self.link_names = self.chain.get_link_names()
-        self.n_links = len(self.link_names)
-        self.ignored_collision_matrix = torch.eye(self.n_links)
+        self.n_spheres = self.radii.shape[0]
+        self.ignored_collision_matrix = torch.eye(self.n_spheres, dtype=self.chain.dtype, device=self.chain.device)
         if ignore_collision_pairs is not None:
+            cumsum = torch.cumsum(self.repeats, dim=0)
+            sphere_start_indices = cumsum - cumsum[0]
+            sphere_end_indices = cumsum
             for link_a, link_b in ignore_collision_pairs:
-                idx_a = self.link_names.index(link_a)
-                idx_b = self.link_names.index(link_b)
-                self.ignored_collision_matrix[idx_a, idx_b] = 1
-                self.ignored_collision_matrix[idx_b, idx_a] = 1
+                link_idx_a = self.link_names.index(link_a)
+                link_idx_b = self.link_names.index(link_b)
+                for sphere_idx_a in torch.arange(sphere_start_indices[link_idx_a], sphere_end_indices[link_idx_a]):
+                    for sphere_idx_b in torch.arange(sphere_start_indices[link_idx_b], sphere_end_indices[link_idx_b]):
+                        self.ignored_collision_matrix[sphere_idx_a, sphere_idx_b] = 1
+                        self.ignored_collision_matrix[sphere_idx_b, sphere_idx_a] = 1
 
-        radii_a = torch.tile(self.radii.unsqueeze(1), [1, self.n_links, 1])
+        radii_a = torch.tile(self.radii[None, None], [1, self.n_spheres, 1])
         radii_b = torch.transpose(radii_a, 1, 2)
         self.radii_matrix = radii_a + radii_b
+
+        for link_name, spheres_for_link in spheres.items():
+            link_frame = self.chain.find_frame(f"{link_name}_frame")
+            for sphere_idx, sphere in enumerate(spheres_for_link):
+                pos = torch.tensor(sphere['position'], dtype=self.chain.dtype, device=self.chain.device)
+                name = f"{link_name}_sphere_{sphere_idx}"
+                offset = Transform3d(pos=pos, dtype=self.chain.dtype, device=self.chain.device)
+                joint = Joint(name=name, dtype=self.chain.dtype, device=self.chain.device, joint_type='fixed')
+                link_frame.add_child(Frame(name=name + "_frame",
+                                           link=Link(name=name, offset=offset),
+                                           joint=joint))
 
     @handle_batch_input(n=2)
     def check_collision(self, joint_positions, return_all_pairs=False):
@@ -109,9 +147,14 @@ class CollisionChecker:
         """
         transforms = self.chain.forward_kinematics(joint_positions)
 
-        positions = [t.get_matrix()[:, :3, 3] for t in transforms.values()]
-        positions_vec = torch.stack(positions, dim=1)
-        d = pairwise_distances(positions_vec)
+        sphere_positions = []
+        for k, t in transforms.items():
+            if 'sphere' in k:
+                sphere_positions.append(t.get_matrix()[:, :3, 3])
+
+        sphere_positions_vec = torch.stack(sphere_positions, dim=1)
+        # TODO: add frames to the chain to represent all the spheres, otherwise we're re-doing work here
+        d = pairwise_distances(sphere_positions_vec)
         d_ignored = d + self.ignored_collision_matrix * 999
         in_collision = d_ignored < self.radii_matrix
         in_collision_any = in_collision.any(dim=2)
@@ -119,9 +162,11 @@ class CollisionChecker:
         if return_all_pairs:
             batch_indices, a_indices, b_indices = torch.where(in_collision)
             pairs = []
-            for batch_idx, a_idx, b_idx in torch.stack([batch_indices, a_indices, b_indices], dim=-1):
-                link_a_name = self.link_names[a_idx]
-                link_b_name = self.link_names[b_idx]
+            for batch_idx, sphere_a_idx, sphere_b_idx in torch.stack([batch_indices, a_indices, b_indices], dim=-1):
+                link_a_idx = self.sphere_idx_to_link_idx[sphere_a_idx]
+                link_b_idx = self.sphere_idx_to_link_idx[sphere_b_idx]
+                link_a_name = self.link_names[link_a_idx]
+                link_b_name = self.link_names[link_b_idx]
                 pair = (link_a_name, link_b_name)
                 pair_reverse = (link_b_name, link_a_name)
                 if pair not in pairs and pair_reverse not in pairs:
@@ -131,18 +176,8 @@ class CollisionChecker:
             return in_collision_any
 
 
-def get_default_ignores(chain: Chain, radii):
-    # parent_child_pairs = []
-    #
-    # def _traverse_chain(parent_frame):
-    #     for child in parent_frame.children:
-    #         parent_child_pairs.append((parent_frame.link.name, child.link.name))
-    #         _traverse_chain(child)
-    #
-    # _traverse_chain(chain._root)
-
-    # TODO: another idea would be to check which links are in collision for most configs?
-    cc = CollisionChecker(chain, radii)
+def get_default_ignores(chain: Chain, spheres: Dict):
+    cc = CollisionChecker(chain, spheres)
     n_config_samples = 1000
     rng = np.random.RandomState(0)
     low, high = chain.get_joint_limits()

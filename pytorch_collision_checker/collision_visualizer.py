@@ -1,6 +1,7 @@
 from typing import Dict
 
 import rospy
+from pytorch_kinematics import Chain
 from visualization_msgs.msg import MarkerArray, Marker
 
 
@@ -8,24 +9,42 @@ class CollisionVisualizer:
 
     def __init__(self):
         self.spheres_pub = rospy.Publisher('spheres', MarkerArray, queue_size=10)
+        self.geoms_pub = rospy.Publisher('geoms', MarkerArray, queue_size=10)
 
-    def display_joint_given_transforms(self, transforms: Dict):
-        # FIXME: where do radii come from?
-        #  how would this function be used?
-        spheres = {}
+    def viz_robot(self, chain: Chain, transforms: Dict, ns: str = ''):
         for link_name, transform in transforms.items():
             transform = transforms[link_name].get_matrix()
             pos = transform[0, :3, 3]
-            spheres[link_name] = {
-                'position': pos,
-                'radius':   radii,
-            }
-        self.viz_from_spheres_dict(spheres)
+            link = chain.find_link(link_name)
+            link.visuals
 
-    def display_joint_config(self, chain, joint_positions):
-        # FIXME: where do radii come from?
-        #  how would this function be used?
-        pass
+
+        msg = MarkerArray()
+        idx = 0
+        for geom_name, geoms_for_geom in geoms.items():
+            for geom in geoms_for_geom:
+                pos = geom['position']
+                r = geom['radius']
+                geom_msg = Marker()
+                geom_msg.ns = ns
+                geom_msg.scale.x = 2 * r
+                geom_msg.scale.y = 2 * r
+                geom_msg.scale.z = 2 * r
+                geom_msg.color.a = 0.7
+                geom_msg.color.r = 0.4
+                geom_msg.color.g = 2.4
+                geom_msg.color.b = 0.4
+                geom_msg.action = Marker.ADD
+                geom_msg.header.frame_id = 'world'
+                geom_msg.pose.position.x = pos[0]
+                geom_msg.pose.position.y = pos[1]
+                geom_msg.pose.position.z = pos[2]
+                geom_msg.pose.orientation.w = 1
+                geom_msg.type = Marker.SPHERE
+                geom_msg.id = idx
+                idx += 1
+                msg.markers.append(geom_msg)
+        self.geoms_pub.publish(msg)
 
     def viz_from_spheres_dict(self, spheres):
         msg = MarkerArray()

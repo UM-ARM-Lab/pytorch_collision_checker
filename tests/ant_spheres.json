@@ -1,0 +1,142 @@
+{
+  "spheres": {
+    "torso": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "front_left_leg": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      },
+      {
+        "position": [
+          0.1,
+          0.1,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "front_right_leg": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "left_back_leg": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "right_back_leg": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "aux_1": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "aux_2": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "aux_3": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "aux_4": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "front_left_foot": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "front_right_foot": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "left_back_foot": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ],
+    "right_back_foot": [
+      {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "radius": 0.125
+      }
+    ]
+  }
+}

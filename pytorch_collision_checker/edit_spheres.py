@@ -214,7 +214,7 @@ def main():
 
     args = parser.parse_args()
 
-    outfilename = args.model_filename.parent / (args.model_filename.stem + ".json")
+    outfilename = args.model_filename.parent / (args.model_filename.stem + "_spheres.json")
 
     if outfilename.exists():
         with outfilename.open("r") as f:
