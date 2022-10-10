@@ -1,11 +1,10 @@
-import json
 import pickle
 
 import torch
 
 import pytorch_kinematics as pk
 from pytorch_collision_checker import cfg
-from pytorch_collision_checker.collision_checker import CollisionChecker, get_default_ignores
+from pytorch_collision_checker.collision_checker import CollisionChecker, get_default_ignores, load_spheres
 
 ANT_PATH = cfg.TEST_DIR / "ant.xml"
 ANT_SPHERES_PATH = cfg.TEST_DIR / "ant_spheres.json"
@@ -45,12 +44,6 @@ def ant_setup():
     chain = chain.to(dtype=dtype, device=device)
     ignore = get_default_ignores(chain, spheres)
     return chain, device, dtype, ignore, spheres
-
-
-def load_spheres(path):
-    with path.open('r') as f:
-        spheres = json.load(f)['spheres']
-    return spheres
 
 
 if __name__ == '__main__':

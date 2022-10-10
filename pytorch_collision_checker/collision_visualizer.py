@@ -6,6 +6,10 @@ from dm_control.mjcf import Physics
 from mujoco import mju_str2Type, mju_mat2Quat, mjtGeom, mj_id2name
 
 import rospy
+from geometry_msgs.msg import Point
+from ros_numpy import msgify
+from rviz_voxelgrid_visuals.conversions import vox_to_float_array
+from rviz_voxelgrid_visuals_msgs.msg import VoxelgridStamped
 from visualization_msgs.msg import MarkerArray, Marker
 
 
@@ -15,32 +19,47 @@ class CollisionVisualizer:
         self.spheres_pub = rospy.Publisher('spheres', MarkerArray, queue_size=10)
         self.geoms_pub = rospy.Publisher('geoms', MarkerArray, queue_size=10)
 
-    def viz_from_spheres_dict(self, spheres):
+    def viz(self, sphere_positions, radii, highlight_indices=None):
+        assert sphere_positions.ndim == 2
+        assert radii.ndim == 1
         msg = MarkerArray()
         idx = 0
-        for link_name, spheres_for_link in spheres.items():
+        for i, (pos, r) in enumerate(zip(sphere_positions, radii)):
+            sphere_msg = Marker()
+            sphere_msg.scale.x = 2 * r
+            sphere_msg.scale.y = 2 * r
+            sphere_msg.scale.z = 2 * r
+            sphere_msg.color.a = 0.5
+            if i in highlight_indices:
+                sphere_msg.color.r = 0.9
+            else:
+                sphere_msg.color.r = 0.4
+            sphere_msg.color.g = 0.4
+            sphere_msg.color.b = 0.4
+            sphere_msg.action = Marker.ADD
+            sphere_msg.header.frame_id = 'world'
+            sphere_msg.pose.position.x = pos[0]
+            sphere_msg.pose.position.y = pos[1]
+            sphere_msg.pose.position.z = pos[2]
+            sphere_msg.pose.orientation.w = 1
+            sphere_msg.type = Marker.SPHERE
+            sphere_msg.id = idx
+            idx += 1
+            msg.markers.append(sphere_msg)
+        self.spheres_pub.publish(msg)
+
+    def viz_from_spheres_dict(self, spheres):
+        sphere_positions = []
+        radii = []
+        for spheres_for_link in spheres.values():
             for sphere in spheres_for_link:
                 pos = sphere['position']
                 r = sphere['radius']
-                sphere_msg = Marker()
-                sphere_msg.scale.x = 2 * r
-                sphere_msg.scale.y = 2 * r
-                sphere_msg.scale.z = 2 * r
-                sphere_msg.color.a = 0.7
-                sphere_msg.color.r = 0.4
-                sphere_msg.color.g = 2.4
-                sphere_msg.color.b = 0.4
-                sphere_msg.action = Marker.ADD
-                sphere_msg.header.frame_id = 'world'
-                sphere_msg.pose.position.x = pos[0]
-                sphere_msg.pose.position.y = pos[1]
-                sphere_msg.pose.position.z = pos[2]
-                sphere_msg.pose.orientation.w = 1
-                sphere_msg.type = Marker.SPHERE
-                sphere_msg.id = idx
-                idx += 1
-                msg.markers.append(sphere_msg)
-        self.spheres_pub.publish(msg)
+                sphere_positions.append(pos)
+                radii.append(r)
+        sphere_positions = np.array(sphere_positions)
+        radii = np.array(radii)
+        self.viz(sphere_positions, radii)
 
 
 class MujocoVisualizer:
@@ -48,7 +67,7 @@ class MujocoVisualizer:
     def __init__(self):
         self.geoms_markers_pub = rospy.Publisher("mj_geoms", MarkerArray, queue_size=10)
 
-    def viz(self, physics: Physics):
+    def viz(self, physics: Physics, alpha=1.0):
         geoms_marker_msg = MarkerArray()
 
         for geom_id in range(physics.model.ngeom):
@@ -86,7 +105,7 @@ class MujocoVisualizer:
             geom_marker_msg.color.r = geom_rgba[0]
             geom_marker_msg.color.g = geom_rgba[1]
             geom_marker_msg.color.g = geom_rgba[2]
-            geom_marker_msg.color.a = geom_rgba[3]
+            geom_marker_msg.color.a = geom_rgba[3] * alpha
 
             if geom_type == mjtGeom.mjGEOM_BOX:
                 geom_marker_msg.type = Marker.CUBE
@@ -169,3 +188,13 @@ class MujocoVisualizer:
 
         self.geoms_markers_pub.publish(geoms_marker_msg)
         # print(f"viz took {perf_counter() - t0:0.3f}")
+
+
+def visualize_vg(pub, vg, origin_point, res):
+    origin_point_viz = origin_point - res / 2
+    msg = VoxelgridStamped()
+    msg.header.frame_id = 'world'
+    msg.origin = msgify(Point, origin_point_viz.cpu().numpy())
+    msg.scale = float(res.cpu().numpy())
+    msg.occupancy = vox_to_float_array(vg)
+    pub.publish(msg)

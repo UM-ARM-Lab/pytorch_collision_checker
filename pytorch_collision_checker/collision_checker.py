@@ -1,55 +1,30 @@
-import functools
+import json
+import pathlib
+import pickle
 from copy import deepcopy
 from typing import Optional, List, Tuple, Dict
 
 import numpy as np
 import torch
 
+import pytorch_kinematics as pk
 from pytorch_collision_checker.sdf import SDF
+from pytorch_collision_checker.utils import handle_batch_input
 from pytorch_kinematics import Chain, SerialChain, Transform3d
 from pytorch_kinematics.frame import Frame, Link, Joint
 
 
-def is_tensor_like(x):
-    return torch.is_tensor(x) or type(x) is np.ndarray
-
-
-# from arm_pytorch_utilities, standalone since that package is not on pypi yet
-def handle_batch_input(n):
-    def _handle_batch_input(func):
-        """For func that expect 2D input, handle input that have more than 2 dimensions by flattening them temporarily"""
-
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            # assume inputs that are tensor-like have compatible shapes and is represented by the first argument
-            batch_dims = []
-            for arg in args:
-                if is_tensor_like(arg) and len(arg.shape) > n:
-                    batch_dims = arg.shape[:-(n - 1)]  # last dimension is type dependent; all previous ones are batches
-                    break
-            # no batches; just return normally
-            if not batch_dims:
-                return func(*args, **kwargs)
-
-            # reduce all batch dimensions down to the first one
-            args = [v.view(-1, *v.shape[-(n - 1):]) if (is_tensor_like(v) and len(v.shape) > 2) else v for v in args]
-            ret = func(*args, **kwargs)
-            # restore original batch dimensions; keep variable dimension (nx)
-            if type(ret) is tuple:
-                ret = [v if (not is_tensor_like(v) or len(v.shape) == 0) else (
-                    v.view(*batch_dims, *v.shape[-(n - 1):]) if len(v.shape) == n else v.view(*batch_dims)) for v in
-                       ret]
-            else:
-                if is_tensor_like(ret):
-                    if len(ret.shape) == n:
-                        ret = ret.view(*batch_dims, *ret.shape[-(n - 1):])
-                    else:
-                        ret = ret.view(*batch_dims)
-            return ret
-
-        return wrapper
-
-    return _handle_batch_input
+def load_model_and_cc(model_filename: pathlib.Path, sdf_filename: pathlib.Path, dtype, device):
+    with sdf_filename.open("rb") as f:
+        sdf: SDF = pickle.load(f)
+    sdf = sdf.to(dtype=dtype, device=device)
+    spheres_filename = model_filename.parent / (model_filename.stem + '_spheres.json')
+    chain = pk.build_chain_from_mjcf(model_filename.open().read())
+    spheres = load_spheres(spheres_filename)
+    chain = chain.to(dtype=dtype, device=device)
+    ignore = get_default_ignores(chain, spheres)
+    cc = CollisionChecker(chain, spheres, sdf=sdf, ignore_collision_pairs=ignore)
+    return cc
 
 
 def pairwise_distances(a):
@@ -79,6 +54,7 @@ def get_radii(chain, spheres):
                 radii.append(sphere_for_link["radius"])
         else:
             repeats.append(1)
+            print(f"Warning! No spheres for {link_name}")
             radii.append(0)  # FIXME: won't actually prevent collision from being detected
     radii = torch.tensor(radii, dtype=chain.dtype, device=chain.device)
     repeats = torch.tensor(repeats, dtype=torch.int, device=chain.device)
@@ -105,6 +81,7 @@ class CollisionChecker:
         self.chain = deepcopy(chain)
         self.dtype = self.chain.dtype
         self.device = self.chain.device
+        self.spheres = spheres
         self.sdf = sdf
         self.radii, self.repeats, self.sphere_idx_to_link_idx = get_radii(chain, spheres)
         self.link_names = self.chain.get_link_names()
@@ -112,7 +89,7 @@ class CollisionChecker:
         self.ignored_collision_matrix = torch.eye(self.n_spheres, dtype=self.chain.dtype, device=self.chain.device)
         if ignore_collision_pairs is not None:
             cumsum = torch.cumsum(self.repeats, dim=0)
-            sphere_start_indices = cumsum - cumsum[0]
+            sphere_start_indices = cumsum - self.repeats
             sphere_end_indices = cumsum
             for link_a, link_b in ignore_collision_pairs:
                 link_idx_a = self.link_names.index(link_a)
@@ -130,12 +107,16 @@ class CollisionChecker:
             link_frame = self.chain.find_frame(f"{link_name}_frame")
             for sphere_idx, sphere in enumerate(spheres_for_link):
                 pos = torch.tensor(sphere['position'], dtype=self.chain.dtype, device=self.chain.device)
-                name = f"{link_name}_sphere_{sphere_idx}"
+                name = self.make_sphere_frame_name(link_name, sphere_idx)
                 offset = Transform3d(pos=pos, dtype=self.chain.dtype, device=self.chain.device)
                 joint = Joint(name=name, dtype=self.chain.dtype, device=self.chain.device, joint_type='fixed')
                 link_frame.add_child(Frame(name=name + "_frame",
                                            link=Link(name=name, offset=offset),
                                            joint=joint))
+
+    def make_sphere_frame_name(self, link_name, sphere_idx):
+        name = f"{link_name}_sphere_{sphere_idx}"
+        return name
 
     @handle_batch_input(n=2)
     def get_all_self_collision_pairs(self, joint_positions):
@@ -155,7 +136,7 @@ class CollisionChecker:
         return pairs
 
     @handle_batch_input(n=2)
-    def check_collision(self, joint_positions):
+    def check_collision(self, joint_positions, return_all=False):
         sphere_positions = self.compute_sphere_positions(joint_positions)
         in_self_collision = self.compute_self_distance_matrix(sphere_positions)
         in_collision_any = in_self_collision.any(dim=2)
@@ -163,11 +144,14 @@ class CollisionChecker:
         if self.sdf is not None:
             d_to_env = self.sdf.get_signed_distance(sphere_positions)
             in_env_collision = d_to_env < self.radii[None]
-            in_collision_any = torch.logical_or(in_collision_any, in_env_collision.any(dim=1))
+            in_collision_any = torch.logical_or(in_collision_any, in_env_collision)
 
-        return in_collision_any
+        if return_all:
+            return in_collision_any
+        else:
+            return in_collision_any.any(dim=1)
 
-    @handle_batch_input(n=2)
+    @handle_batch_input(n=3)
     def compute_self_distance_matrix(self, sphere_positions):
         d_to_self = pairwise_distances(sphere_positions)
         d_to_self_ignored = d_to_self + self.ignored_collision_matrix * 999
@@ -176,10 +160,12 @@ class CollisionChecker:
 
     @handle_batch_input(n=2)
     def compute_sphere_positions(self, joint_positions):
-        transforms = self.chain.forward_kinematics(joint_positions)
         sphere_positions = []
-        for k, t in transforms.items():
-            if 'sphere' in k:
+        transforms = self.chain.forward_kinematics(joint_positions)
+        for link_name, spheres_for_link in self.spheres.items():
+            for sphere_idx, sphere_for_link in enumerate(spheres_for_link):
+                sphere_frame_name = self.make_sphere_frame_name(link_name, sphere_idx)
+                t = transforms[sphere_frame_name]
                 sphere_positions.append(t.get_matrix()[:, :3, 3])
         sphere_positions_vec = torch.stack(sphere_positions, dim=1)
         return sphere_positions_vec
@@ -187,7 +173,7 @@ class CollisionChecker:
 
 def get_default_ignores(chain: Chain, spheres: Dict):
     cc = CollisionChecker(chain, spheres)
-    n_config_samples = 1000
+    n_config_samples = 100  # NOTE: do this in batch!!!
     rng = np.random.RandomState(0)
     low, high = chain.get_joint_limits()
     pair_count_map = {}
@@ -205,3 +191,9 @@ def get_default_ignores(chain: Chain, spheres: Dict):
             ignore.append(pair)
 
     return ignore
+
+
+def load_spheres(path):
+    with path.open('r') as f:
+        spheres = json.load(f)['spheres']
+    return spheres

@@ -3,8 +3,11 @@
     <body name="floor" pos="0 0 0">
       <geom name="floor" pos="0 0 0" size="1 1 0.05" type="box"/>
     </body>
-    <body name="wall" pos="1 0 1">
+    <body name="wall" pos="0.7 0 1">
       <geom name="wall" pos="0 0 0" size="0.05 1 1" type="box"/>
     </body>
+<!--    <body name="box" pos="0.5 0.5 0.5">-->
+<!--      <geom name="box" pos="0 0 0" size="0.2 0.2 0.2" type="box"/>-->
+<!--    </body>-->
   </worldbody>
 </mujoco>
