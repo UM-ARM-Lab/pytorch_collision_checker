@@ -43,3 +43,6 @@ def handle_batch_input(n):
         return wrapper
 
     return _handle_batch_input
+
+def homogeneous_np(point):
+    return np.concatenate([point, [1]], axis=-1)

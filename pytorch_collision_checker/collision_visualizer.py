@@ -1,5 +1,8 @@
 from copy import deepcopy
 
+from pytorch_collision_checker.utils import homogeneous_np
+from tf import transformations
+
 import mujoco
 import numpy as np
 from dm_control.mjcf import Physics
@@ -12,6 +15,15 @@ from rviz_voxelgrid_visuals.conversions import vox_to_float_array
 from rviz_voxelgrid_visuals_msgs.msg import VoxelgridStamped
 from visualization_msgs.msg import MarkerArray, Marker
 
+def make_delete_marker(marker_id: int = 0, ns: str = ''):
+    m = Marker(action=Marker.DELETEALL, ns=ns, id=marker_id)
+    return m
+
+
+def make_delete_markerarray(marker_id: int = 0, ns: str = ''):
+    m = Marker(action=Marker.DELETEALL, ns=ns, id=marker_id)
+    msg = MarkerArray(markers=[m])
+    return msg
 
 class CollisionVisualizer:
 
@@ -20,6 +32,8 @@ class CollisionVisualizer:
         self.geoms_pub = rospy.Publisher('geoms', MarkerArray, queue_size=10)
 
     def viz(self, sphere_positions, radii, highlight_indices=None):
+        self.spheres_pub.publish(make_delete_markerarray())
+
         assert sphere_positions.ndim == 2
         assert radii.ndim == 1
         msg = MarkerArray()
@@ -30,7 +44,7 @@ class CollisionVisualizer:
             sphere_msg.scale.y = 2 * r
             sphere_msg.scale.z = 2 * r
             sphere_msg.color.a = 0.5
-            if i in highlight_indices:
+            if highlight_indices is not None and i in highlight_indices:
                 sphere_msg.color.r = 0.9
             else:
                 sphere_msg.color.r = 0.4
@@ -48,26 +62,30 @@ class CollisionVisualizer:
             msg.markers.append(sphere_msg)
         self.spheres_pub.publish(msg)
 
-    def viz_from_spheres_dict(self, spheres):
-        sphere_positions = []
+    def viz_from_spheres_dict(self, transforms, spheres):
+        sphere_positions_root_frame = []
         radii = []
-        for spheres_for_link in spheres.values():
+        for link_name, spheres_for_link in spheres.items():
             for sphere in spheres_for_link:
-                pos = sphere['position']
+                pos_link_frame = sphere['position']
                 r = sphere['radius']
-                sphere_positions.append(pos)
+                t = transforms[link_name].get_matrix().numpy()[0]
+                pos_root_frame = (t @ homogeneous_np(pos_link_frame))[:3]
+                sphere_positions_root_frame.append(pos_root_frame)
                 radii.append(r)
-        sphere_positions = np.array(sphere_positions)
+        sphere_positions_root_frame = np.array(sphere_positions_root_frame)
         radii = np.array(radii)
-        self.viz(sphere_positions, radii)
+        self.viz(sphere_positions_root_frame, radii)
 
 
 class MujocoVisualizer:
 
     def __init__(self):
-        self.geoms_markers_pub = rospy.Publisher("mj_geoms", MarkerArray, queue_size=10)
+        self.default_pub = rospy.Publisher("mj_geoms", MarkerArray, queue_size=10)
+        self.publishers = {
+        }
 
-    def viz(self, physics: Physics, alpha=1.0):
+    def viz(self, physics: Physics, alpha=1.0, ns: str = ''):
         geoms_marker_msg = MarkerArray()
 
         for geom_id in range(physics.model.ngeom):
@@ -163,7 +181,7 @@ class MujocoVisualizer:
                 geom_marker_msg.scale.z = geom_size[0] * 2
             elif geom_type == mjtGeom.mjGEOM_MESH:
                 mesh_name = mj_id2name(physics.model.ptr, mju_str2Type('mesh'), geom_meshid)
-                mesh_name = mesh_name.split("/")[1]  # skip the model prefix, e.g. val/my_mesh
+                mesh_name = mesh_name.split("/")[-1]  # skip the model prefix, e.g. val/my_mesh
                 geom_marker_msg.type = Marker.MESH_RESOURCE
                 geom_marker_msg.mesh_resource = f"package://dm_envs/meshes/{mesh_name}.stl"
 
@@ -186,7 +204,8 @@ class MujocoVisualizer:
 
             geoms_marker_msg.markers.append(geom_marker_msg)
 
-        self.geoms_markers_pub.publish(geoms_marker_msg)
+        pub = self.publishers.get(ns, self.default_pub)
+        pub.publish(geoms_marker_msg)
         # print(f"viz took {perf_counter() - t0:0.3f}")
 
 

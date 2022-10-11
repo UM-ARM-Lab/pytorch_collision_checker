@@ -1,8 +1,10 @@
 import argparse
+import contextlib
 import json
 import pathlib
 import sys
 from datetime import datetime
+from threading import Thread
 from typing import Dict
 
 import numpy as np
@@ -11,13 +13,34 @@ from PyQt5.QtWidgets import QTreeWidgetItem
 from dm_control import mujoco
 
 import pytorch_kinematics as pk
+import ros_numpy
 import rospy
+import tf.transformations
+from arc_utilities.tf2wrapper import TF2Wrapper
 from geometry_msgs.msg import Pose
 from pytorch_collision_checker.basic_3d_pose_marker import Basic3DPoseInteractiveMarker
 from pytorch_collision_checker.collision_visualizer import CollisionVisualizer, MujocoVisualizer
 from pytorch_collision_checker.sphere_editor import Ui_MainWindow
+from pytorch_collision_checker.utils import homogeneous_np
 from pytorch_kinematics import Chain
 from visualization_msgs.msg import InteractiveMarkerFeedback
+
+
+def _publish_tf(root_name, transforms):
+    tfw = TF2Wrapper()
+    while True:
+        tfw.send_transform([0, 0, 0], [0, 0, 0, 1], parent='world', child=root_name, is_static=True)
+        for k, t in transforms.items():
+            transform = t.get_matrix().numpy()[0]
+            tfw.send_transform_matrix(transform, parent=root_name, child=k, is_static=True)
+        rospy.sleep(1)
+
+
+@contextlib.contextmanager
+def blocked(widget):
+    widget.blockSignals(True)
+    yield
+    widget.blockSignals(False)
 
 
 class EditSphere:
@@ -27,6 +50,10 @@ class EditSphere:
         self.chain = chain
         self.transforms = self.chain.forward_kinematics(
             np.zeros(len(self.chain.get_joint_parameter_names(exclude_fixed=True))))
+
+        # publish everything to tk
+        self.tfw_thread = Thread(target=_publish_tf, args=(self.chain._root.name, self.transforms))
+        self.tfw_thread.start()
 
         self.cc_viz = CollisionVisualizer()
         self.mj_viz = MujocoVisualizer()
@@ -129,16 +156,20 @@ class EditSphere:
             return
         link_name = item.parent().text(0)
         sphere_idx = int(item.text(1))
-        pos = self.data['spheres'][link_name][sphere_idx]['position']
-        x = feedback.pose.position.x
-        y = feedback.pose.position.y
-        z = feedback.pose.position.z
-        pos[0] = x
-        pos[1] = y
-        pos[2] = z
+        pos_link_frame = self.data['spheres'][link_name][sphere_idx]['position']  # update this in-place
+        pose_root_frame = feedback.pose
+        t = tf.transformations.inverse_matrix(self.transforms[link_name].get_matrix())[0]
+        new_pos_link_frame = (t @ homogeneous_np(ros_numpy.numpify(pose_root_frame.position)))[:3]
+        print(t)
+        print(new_pos_link_frame)
+        new_x_link_frame, new_y_link_frame, new_z_link_frame = new_pos_link_frame
+        pos_link_frame[0] = new_x_link_frame
+        pos_link_frame[1] = new_y_link_frame
+        pos_link_frame[2] = new_z_link_frame
+        # transform the world position into link frame using ros tf
         self.publish_spheres()
 
-        self.set_position_text(item, pos)
+        self.set_position_text(item, pos_link_frame)
 
     def on_save(self):
         with self.outfilename.open("w") as f:
@@ -155,10 +186,9 @@ class EditSphere:
         link_name = item.parent().text(0)
         sphere_idx = int(item.text(1))
         self.data['spheres'][link_name].pop(sphere_idx - 1)
-        # FIXME:
-        # self.ui.spheres_tree.removeItemWidget(item, 1)
-        # self.ui.spheres_tree.removeItemWidget(item, 2)
-        # self.ui.spheres_tree.removeItemWidget(item, 3)
+        item.parent().removeChild(item)
+
+        self.publish_spheres()
 
     def on_add(self):
         parent_item = self.ui.spheres_tree.currentItem()
@@ -168,36 +198,38 @@ class EditSphere:
         sphere_idx = parent_item.childCount()
         link_name = parent_item.text(0)
 
-        pos, radius = self.copy_from_current_item(link_name)
+        radius = self.copy_radius_from_current_item()
+        # TODO: maybe copy pos from current item?
+        pos_link_frame = [0, 0, 0]
 
         # move the IM to match the newly created sphere
-        pose = Pose()
-        pose.position.x = pos[0]
-        pose.position.y = pos[1]
-        pose.position.z = pos[2]
-        self.i.set_pose(pose)
+        pos_root_frame = self.get_link_xyz(link_name)
+        pose_root_frame = Pose()
+        pose_root_frame.position.x = pos_root_frame[0]
+        pose_root_frame.position.y = pos_root_frame[1]
+        pose_root_frame.position.z = pos_root_frame[2]
+        self.i.set_pose(pose_root_frame)
 
         sphere = {
-            'position': pos,
+            'position': pos_link_frame,
             'radius':   radius,
         }
         self.add_sphere_item_to_tree(parent_item, sphere_idx, sphere)
+        with blocked(self.ui.radius_spinbox):
+            self.ui.radius_spinbox.setValue(radius)
         self.data['spheres'][link_name].append(sphere)
 
         self.publish_spheres()
 
-    def copy_from_current_item(self, link_name):
-        x, y, z = self.get_link_xyz(link_name)
+    def copy_radius_from_current_item(self):
         item = self.ui.spheres_tree.currentItem()
         if item is None:
-            return [0, 0, 0], 0.1
+            return 0.1
         elif item.parent() is None:
-            return [x, y, z], 0.1
+            return 0.1
         else:
-            xyz_str = item.text(2)
-            pos = np.fromstring(xyz_str, dtype=np.float, sep=', ').tolist()
             radius = float(item.text(3))
-            return pos, radius
+            return radius
 
     def get_link_xyz(self, link_name):
         transform = self.transforms[link_name].get_matrix()
@@ -207,11 +239,12 @@ class EditSphere:
         return x, y, z
 
     def publish_spheres(self):
-        self.cc_viz.viz_from_spheres_dict(self.data['spheres'])
+        self.cc_viz.viz_from_spheres_dict(self.transforms, self.data['spheres'])
         self.mj_viz.viz(self.physics)
 
 
 def main():
+    np.set_printoptions(precision=4, suppress=True, linewidth=220)
     rospy.init_node('edit_spheres')
     parser = argparse.ArgumentParser()
     parser.add_argument('model_filename', type=pathlib.Path)

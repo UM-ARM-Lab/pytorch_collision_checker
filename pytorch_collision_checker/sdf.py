@@ -15,24 +15,24 @@ class SDF:
         self.res = res
         self.sdf = sdf
 
-    @handle_batch_input(n=3)
+    @handle_batch_input(n=2)
     def get_signed_distance(self, positions):
         """
+        Note this function does _not_ operate on _multiple_ sdfs in batch, but just _one_ SDF
 
         Args:
-            positions: [b, n_points, 3]
+            positions: [b, 3]
 
         Returns:
 
         """
         indices = point_to_idx(positions, self.origin_point, self.res).long()
-        x_indices, y_indices, z_indices = torch.unbind(indices, dim=2)
-        b, n_points, _ = positions.shape
-        batch_indices = torch.arange(0, b).unsqueeze(1).tile([1, n_points])
+        x_indices, y_indices, z_indices = torch.unbind(indices, dim=-1)
+        b, _ = positions.shape
         # NOTE: we handle OOB points by padding
         shape = torch.tensor(self.sdf.shape[1:], dtype=self.sdf.dtype, device=self.sdf.device)
-        before = torch.clamp(-indices, min=0).max(dim=1)[0].max(dim=0)[0]  # [b, 3]
-        after = torch.clamp(indices - (shape - 1), min=0).max(dim=1)[0].max(dim=0)[0]
+        before = torch.clamp(-indices, min=0).max(dim=0)[0]
+        after = torch.clamp(indices - (shape - 1), min=0).max(dim=0)[0]
         before_x, before_y, before_z = before
         after_x, after_y, after_z = after
         padding = [int(before_z), int(after_z), int(before_y), int(after_y), int(before_x), int(after_x)]
@@ -40,7 +40,8 @@ class SDF:
         x_indices_padded = x_indices + before_x
         y_indices_padded = y_indices + before_y
         z_indices_padded = z_indices + before_z
-        distances = padded_sdf[batch_indices, x_indices_padded, y_indices_padded, z_indices_padded]
+        zero_indices = torch.zeros_like(x_indices_padded)
+        distances = padded_sdf[zero_indices, x_indices_padded, y_indices_padded, z_indices_padded]
         return distances
 
     def to(self, dtype=None, device=None):

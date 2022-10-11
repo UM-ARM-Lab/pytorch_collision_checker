@@ -5,11 +5,11 @@ import numpy as np
 import torch
 from dm_control import mjcf
 from dm_control import mujoco
-from tqdm import tqdm
 
 import rospy
 from pytorch_collision_checker.collision_checker import load_model_and_cc
 from pytorch_collision_checker.collision_visualizer import CollisionVisualizer, MujocoVisualizer
+
 
 def main():
     torch.set_printoptions(precision=4, sci_mode=False, linewidth=220)
@@ -24,6 +24,7 @@ def main():
     dtype = torch.float64
     device = 'cuda'
     cc = load_model_and_cc(args.model_filename, args.sdf_filename, dtype, device)
+    n_joints = len(cc.chain.get_joint_parameter_names(True))
 
     env_model = mjcf.from_path(args.env_filename.as_posix())
     robot_model = mjcf.from_path(args.model_filename.as_posix())
@@ -35,7 +36,7 @@ def main():
 
     rng = np.random.RandomState(0)
     for i in range(10):
-        joint_positions = rng.randn(1, 8)
+        joint_positions = rng.randn(1, n_joints)
         # joint_positions = np.zeros([1, 8])
 
         physics.data.qpos[:] = joint_positions[0]
