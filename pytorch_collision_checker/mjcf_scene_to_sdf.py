@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import argparse
 import pathlib
 import pickle
@@ -15,14 +16,21 @@ from pytorch_collision_checker.sdf import idx_to_point_from_origin_point, extent
 from rviz_voxelgrid_visuals_msgs.msg import VoxelgridStamped
 
 
-def get_voxelgrid(model_filename, res, extent, origin_point):
+def get_voxelgrid_from_filename(model_filename, res, extent, origin_point):
     model = mjcf.from_path(model_filename.as_posix())
     cc_sphere = mjcf.element.RootElement(model='vgb_sphere')
     cc_sphere.worldbody.add('geom', name='geom', type='sphere', size=[res])
     cc_sphere_frame = model.attach(cc_sphere)
     cc_sphere_frame.add('freejoint')
-    physics = mjcf.Physics.from_mjcf_model(model)
+    return get_voxelgrid_from_model(model, res, extent, origin_point)
 
+
+def get_voxelgrid_from_model(model, res, extent, origin_point):
+    physics = mjcf.Physics.from_mjcf_model(model)
+    return get_voxelgrid(physics, res, extent, origin_point)
+
+
+def get_voxelgrid(physics, res, extent, origin_point):
     res = np.float32(res)
     shape = extent_to_env_shape(extent, res)
 
@@ -48,6 +56,35 @@ def get_voxelgrid(model_filename, res, extent, origin_point):
     return vg
 
 
+def mjcf_filename_to_sdf(model_filename, res, xmin, xmax, ymin, ymax, zmin, zmax):
+    outdir = model_filename.parent
+    nickname = model_filename.stem
+    outfilename = outdir / (nickname + "_sdf.pkl")
+    origin_point = torch.tensor([xmin, ymin, zmin]) + res / 2  # center  of the voxel [0,0,0]
+    res = torch.tensor([res])
+    extent = np.array([xmin, xmax, ymin, ymax, zmin, zmax])
+    # seems like there's a small error here somewhere
+    vg = get_voxelgrid_from_filename(model_filename, res, extent, origin_point)
+    sdf, _ = sdf_tools.utils_3d.compute_sdf_and_gradient(vg, res, origin_point)
+    sdf = torch.tensor(sdf).unsqueeze(0)
+    sdf = SDF(origin_point=origin_point, res=res, sdf=sdf)
+
+    with outfilename.open("wb") as f:
+        pickle.dump(sdf, f)
+
+    return origin_point, res, vg
+
+
+def viz_scene_and_vg(model_filename, origin_point, res, vg):
+    mj_viz = MujocoVisualizer()
+    env_physics_for_viz = mujoco.Physics.from_xml_path(model_filename.as_posix())
+    pub = rospy.Publisher("vg", VoxelgridStamped, queue_size=10)
+    for _ in range(10):
+        visualize_vg(pub, vg, origin_point, res)
+        mj_viz.viz(env_physics_for_viz)
+        rospy.sleep(0.1)
+
+
 def main():
     rospy.init_node("mjcf_scene_to_sdf")
 
@@ -63,29 +100,11 @@ def main():
 
     args = parser.parse_args()
 
-    outfilename = args.model_filename.parent / (args.model_filename.stem + "_sdf.pkl")
-    origin_point = torch.tensor([args.xmin, args.ymin, args.zmin]) + args.res / 2  # center  of the voxel [0,0,0
-    res = torch.tensor([args.res])
-    extent = np.array([args.xmin, args.xmax, args.ymin, args.ymax, args.zmin, args.zmax])
+    origin_point, res, vg = mjcf_filename_to_sdf(args.model_filename, args.res, args.xmin, args.xmax, args.ymin,
+                                                 args.ymax,
+                                                 args.zmin, args.zmax)
 
-    # seems like there's a small error here somewhere
-    vg = get_voxelgrid(args.model_filename, res, extent, origin_point)
-
-    sdf, _ = sdf_tools.utils_3d.compute_sdf_and_gradient(vg, res, origin_point)
-    sdf = torch.tensor(sdf).unsqueeze(0)
-
-    sdf = SDF(origin_point=origin_point, res=res, sdf=sdf)
-
-    mj_viz = MujocoVisualizer()
-    env_physics_for_viz = mujoco.Physics.from_xml_path(args.model_filename.as_posix())
-    pub = rospy.Publisher("vg", VoxelgridStamped, queue_size=10)
-    for _ in range(10):
-        visualize_vg(pub, vg, origin_point, res)
-        mj_viz.viz(env_physics_for_viz)
-        rospy.sleep(0.1)
-
-    with outfilename.open("wb") as f:
-        pickle.dump(sdf, f)
+    viz_scene_and_vg(args.model_filename, origin_point, res, vg)
 
 
 if __name__ == '__main__':

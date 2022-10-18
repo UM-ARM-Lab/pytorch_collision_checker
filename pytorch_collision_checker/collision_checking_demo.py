@@ -3,12 +3,14 @@ import pathlib
 
 import numpy as np
 import torch
+import transformations
 from dm_control import mjcf
 from dm_control import mujoco
 
 import rospy
 from pytorch_collision_checker.collision_checker import load_model_and_cc
-from pytorch_collision_checker.collision_visualizer import CollisionVisualizer, MujocoVisualizer
+from pytorch_collision_checker.collision_visualizer import CollisionVisualizer, MujocoVisualizer, \
+    make_delete_markerarray
 
 
 def main():
@@ -28,7 +30,9 @@ def main():
 
     env_model = mjcf.from_path(args.env_filename.as_posix())
     robot_model = mjcf.from_path(args.model_filename.as_posix())
-    env_model.attach(robot_model)
+    attach_site_ = env_model.attach(robot_model)
+    attach_site_.pos = [0, -1.25, 0]
+    attach_site_.quat = transformations.quaternion_from_euler(0, 0, np.pi/2)
     physics = mjcf.Physics.from_mjcf_model(env_model)
 
     cc_viz = CollisionVisualizer()
@@ -48,6 +52,7 @@ def main():
             print("Collision!")
         highlight_indices = torch.where(in_collision_any.squeeze(dim=0))[0]
         sphere_positions = cc.compute_sphere_positions(joint_positions)
+        cc_viz.spheres_pub.publish(make_delete_markerarray())
         for _ in range(3):
             cc_viz.viz(sphere_positions.squeeze(dim=0), cc.radii.squeeze(dim=0), highlight_indices=highlight_indices)
             mj_viz.viz(physics, alpha=1)

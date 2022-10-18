@@ -1,19 +1,22 @@
 from copy import deepcopy
 
-from pytorch_collision_checker.utils import homogeneous_np
-from tf import transformations
-
 import mujoco
 import numpy as np
+import torch
 from dm_control.mjcf import Physics
+from matplotlib.colors import to_rgba
 from mujoco import mju_str2Type, mju_mat2Quat, mjtGeom, mj_id2name
 
 import rospy
 from geometry_msgs.msg import Point
+from pytorch_collision_checker.collision_checker import CollisionChecker
+from pytorch_collision_checker.utils import homogeneous_np
 from ros_numpy import msgify
 from rviz_voxelgrid_visuals.conversions import vox_to_float_array
 from rviz_voxelgrid_visuals_msgs.msg import VoxelgridStamped
+from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import MarkerArray, Marker
+
 
 def make_delete_marker(marker_id: int = 0, ns: str = ''):
     m = Marker(action=Marker.DELETEALL, ns=ns, id=marker_id)
@@ -25,40 +28,40 @@ def make_delete_markerarray(marker_id: int = 0, ns: str = ''):
     msg = MarkerArray(markers=[m])
     return msg
 
+
 class CollisionVisualizer:
 
     def __init__(self):
         self.spheres_pub = rospy.Publisher('spheres', MarkerArray, queue_size=10)
         self.geoms_pub = rospy.Publisher('geoms', MarkerArray, queue_size=10)
 
-    def viz(self, sphere_positions, radii, highlight_indices=None):
-        self.spheres_pub.publish(make_delete_markerarray())
-
+    def viz(self, sphere_positions, radii, label='', idx=0, color=None, highlight_indices=None, frame_id='world'):
         assert sphere_positions.ndim == 2
         assert radii.ndim == 1
         msg = MarkerArray()
-        idx = 0
         for i, (pos, r) in enumerate(zip(sphere_positions, radii)):
             sphere_msg = Marker()
             sphere_msg.scale.x = 2 * r
             sphere_msg.scale.y = 2 * r
             sphere_msg.scale.z = 2 * r
-            sphere_msg.color.a = 0.5
-            if highlight_indices is not None and i in highlight_indices:
-                sphere_msg.color.r = 0.9
+            if color is None:
+                sphere_msg.color = ColorRGBA(*to_rgba(color))
             else:
-                sphere_msg.color.r = 0.4
-            sphere_msg.color.g = 0.4
-            sphere_msg.color.b = 0.4
+                sphere_msg.color.r = 0.2
+                sphere_msg.color.g = 0.2
+                sphere_msg.color.b = 0.2
+            if highlight_indices is not None and i in highlight_indices:
+                sphere_msg.color.r = 1
+            sphere_msg.color.a = 0.5
             sphere_msg.action = Marker.ADD
-            sphere_msg.header.frame_id = 'world'
+            sphere_msg.header.frame_id = frame_id
             sphere_msg.pose.position.x = pos[0]
             sphere_msg.pose.position.y = pos[1]
             sphere_msg.pose.position.z = pos[2]
             sphere_msg.pose.orientation.w = 1
             sphere_msg.type = Marker.SPHERE
-            sphere_msg.id = idx
-            idx += 1
+            sphere_msg.id = 1000 * idx + i
+            sphere_msg.ns = label
             msg.markers.append(sphere_msg)
         self.spheres_pub.publish(msg)
 
@@ -76,6 +79,14 @@ class CollisionVisualizer:
         sphere_positions_root_frame = np.array(sphere_positions_root_frame)
         radii = np.array(radii)
         self.viz(sphere_positions_root_frame, radii)
+
+    def viz_joint_config(self, joint_positions, cc: CollisionChecker, label: str, idx: int, color, frame_id):
+        sphere_positions = cc.compute_sphere_positions(joint_positions)
+        sphere_positions = sphere_positions.squeeze(0)
+        in_collision_any = cc.check_collision(joint_positions, return_all=True)  # [b, n_spheres]
+        highlight_indices = torch.where(in_collision_any.squeeze(dim=0))[0]
+        self.viz(sphere_positions, cc.radii, label=label, idx=idx, color=color, highlight_indices=highlight_indices,
+                 frame_id=frame_id)
 
 
 class MujocoVisualizer:

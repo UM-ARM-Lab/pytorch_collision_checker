@@ -59,6 +59,7 @@ class EditSphere:
         self.mj_viz = MujocoVisualizer()
         self.physics = mujoco.Physics.from_xml_string(model_filename.open().read())
         self.i = Basic3DPoseInteractiveMarker(cb=self.im_cb, frame_id='world')
+        self.last_radius = None
 
         if 'spheres' not in self.data:
             self.data['spheres'] = {}
@@ -105,6 +106,7 @@ class EditSphere:
         sphere_idx = int(item.text(1))
         sphere = self.data['spheres'][link_name][sphere_idx]
         sphere['radius'] = radius
+        self.last_radius = radius
 
         self.publish_spheres()
 
@@ -160,13 +162,11 @@ class EditSphere:
         pose_root_frame = feedback.pose
         t = tf.transformations.inverse_matrix(self.transforms[link_name].get_matrix())[0]
         new_pos_link_frame = (t @ homogeneous_np(ros_numpy.numpify(pose_root_frame.position)))[:3]
-        print(t)
-        print(new_pos_link_frame)
         new_x_link_frame, new_y_link_frame, new_z_link_frame = new_pos_link_frame
         pos_link_frame[0] = new_x_link_frame
         pos_link_frame[1] = new_y_link_frame
         pos_link_frame[2] = new_z_link_frame
-        # transform the world position into link frame using ros tf
+
         self.publish_spheres()
 
         self.set_position_text(item, pos_link_frame)
@@ -198,9 +198,7 @@ class EditSphere:
         sphere_idx = parent_item.childCount()
         link_name = parent_item.text(0)
 
-        radius = self.copy_radius_from_current_item()
-        # TODO: maybe copy pos from current item?
-        pos_link_frame = [0, 0, 0]
+        pos_link_frame, radius = self.copy_from_current_item()
 
         # move the IM to match the newly created sphere
         pos_root_frame = self.get_link_xyz(link_name)
@@ -221,15 +219,23 @@ class EditSphere:
 
         self.publish_spheres()
 
-    def copy_radius_from_current_item(self):
+    def copy_from_current_item(self):
         item = self.ui.spheres_tree.currentItem()
-        if item is None:
-            return 0.1
-        elif item.parent() is None:
-            return 0.1
+        if self.last_radius is not None:
+            radius = self.last_radius
         else:
+            radius = 0.075
+
+        if item is None:
+            pos_link_frame = [0, 0, 0]
+        elif item.parent() is None:
+            pos_link_frame = [0, 0, 0]
+        else:
+            xyz_str = item.text(2)
+            pos_link_frame = np.fromstring(xyz_str, dtype=np.float, sep=', ').tolist()
             radius = float(item.text(3))
-            return radius
+
+        return pos_link_frame, radius
 
     def get_link_xyz(self, link_name):
         transform = self.transforms[link_name].get_matrix()
