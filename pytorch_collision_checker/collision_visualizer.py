@@ -80,7 +80,8 @@ class CollisionVisualizer:
         radii = np.array(radii)
         self.viz(sphere_positions_root_frame, radii)
 
-    def viz_joint_config(self, joint_positions, cc: CollisionChecker, label: str, idx: int, color, frame_id):
+    def viz_joint_config(self, joint_positions, cc: CollisionChecker, label: str, idx: int = 0, color='k',
+                         frame_id='val/base_body'):
         sphere_positions = cc.compute_sphere_positions(joint_positions)
         sphere_positions = sphere_positions.squeeze(0)
         in_collision_any = cc.check_collision(joint_positions, return_all=True)  # [b, n_spheres]
