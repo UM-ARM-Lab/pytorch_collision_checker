@@ -2,7 +2,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from geometry_msgs.msg import Point
+from moonshine.numpify import numpify
 from pytorch_collision_checker.utils import handle_batch_input
+from ros_numpy import msgify
+from rviz_voxelgrid_visuals.conversions import vox_to_float_array
+from rviz_voxelgrid_visuals_msgs.msg import VoxelgridStamped
 
 
 class SDF:
@@ -15,8 +20,51 @@ class SDF:
         self.res = res
         self.sdf = sdf
 
+        from time import perf_counter
+        t0 = perf_counter()
+        cx = torch.arange(-1, 2, dtype=res.dtype).reshape([3, 1, 1]).tile([1, 3, 3])[None, None]
+        cy = torch.arange(-1, 2, dtype=res.dtype).reshape([1, 3, 1]).tile([3, 1, 3])[None, None]
+        cz = torch.arange(-1, 2, dtype=res.dtype).reshape([1, 1, 3]).tile([3, 3, 1])[None, None]
+        d = self.sdf.unsqueeze(1)
+        d_conv_cx = torch.conv3d(d, cx, padding='same')
+        d_conv_cy = torch.conv3d(d, cy, padding='same')
+        d_conv_cz = torch.conv3d(d, cz, padding='same')
+        self.grad = torch.stack([d_conv_cx, d_conv_cy, d_conv_cz], dim=-1).squeeze(1)
+        print(f'dt to compute gradient: {perf_counter() - t0:.4f}')
+
     @handle_batch_input(n=2)
     def get_signed_distance(self, positions):
+        """
+        Note this function does _not_ operate on _multiple_ sdfs in batch, but just _one_ SDF
+
+        Args:
+            positions: [b, 3]
+
+        Returns:
+
+        """
+        dtype = self.res.dtype
+        device = self.res.device
+        indices = point_to_idx(positions, self.origin_point, self.res).long()
+
+        shape = torch.tensor(self.sdf.shape[1:], dtype=dtype, device=device)
+
+        is_oob = torch.any((indices < 0) | (indices >= shape), dim=-1)
+        batch_oob_i, = torch.where(is_oob)
+        batch_ib_i, = torch.where(~is_oob)
+        ib_indices = indices[batch_ib_i]
+        oob_d = 999
+        oob_distances_flat = torch.ones_like(batch_oob_i, dtype=dtype) * oob_d
+        ib_x_i, ib_y_i, ib_z_i = torch.unbind(ib_indices, dim=-1)
+        ib_zeros_i = torch.zeros_like(ib_x_i)
+        ib_distances_flat = self.sdf[ib_zeros_i, ib_x_i, ib_y_i, ib_z_i]
+        distances = torch.zeros([positions.shape[0]]).to(dtype=dtype, device=device)
+        distances[batch_oob_i] = oob_distances_flat
+        distances[batch_ib_i] = ib_distances_flat
+        return distances
+
+    @handle_batch_input(n=2)
+    def interp_distance_differentiable(self, positions):
         """
         Note this function does _not_ operate on _multiple_ sdfs in batch, but just _one_ SDF
 
@@ -51,10 +99,21 @@ class SDF:
         other.sdf = other.sdf.to(dtype=dtype, device=device)
         other.origin_point = other.origin_point.to(dtype=dtype, device=device)
         other.res = other.res.to(dtype=dtype, device=device)
+        other.grad = other.grad.to(dtype=dtype, device=device)
         return other
 
     def clone(self):
         return SDF(self.origin_point.clone(), self.res.clone(), self.sdf.clone())
+
+    def to_voxelgrid(self):
+        return self.sdf < 0
+
+    def viz(self, pub):
+        vg_np = numpify(self.to_voxelgrid().squeeze())
+        op_np = numpify(self.origin_point)
+        res_np = numpify(self.res)
+        for _ in range(10):
+            visualize_vg(pub, vg_np, op_np, res_np)
 
 
 def point_to_idx(points, origin_point, res):
@@ -86,3 +145,13 @@ def extent_to_env_shape(extent, res):
     env_y_cols = int(env_y_m / res)
     env_z_channels = int(env_z_m / res)
     return env_x_rows, env_y_cols, env_z_channels
+
+
+def visualize_vg(pub, vg, origin_point, res):
+    origin_point_viz = origin_point - res / 2
+    msg = VoxelgridStamped()
+    msg.header.frame_id = 'world'
+    msg.origin = msgify(Point, origin_point_viz)
+    msg.scale = float(res)
+    msg.occupancy = vox_to_float_array(vg)
+    pub.publish(msg)

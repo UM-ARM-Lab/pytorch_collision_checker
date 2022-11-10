@@ -35,7 +35,7 @@ class CollisionVisualizer:
         self.spheres_pub = rospy.Publisher('spheres', MarkerArray, queue_size=10)
         self.geoms_pub = rospy.Publisher('geoms', MarkerArray, queue_size=10)
 
-    def viz(self, sphere_positions, radii, label='', idx=0, color=None, highlight_indices=None, frame_id='world'):
+    def viz(self, sphere_positions, radii, label='', idx=0, color='k', highlight_indices=None, frame_id='world'):
         assert sphere_positions.ndim == 2
         assert radii.ndim == 1
         msg = MarkerArray()
@@ -195,7 +195,7 @@ class MujocoVisualizer:
                 mesh_name = mj_id2name(physics.model.ptr, mju_str2Type('mesh'), geom_meshid)
                 mesh_name = mesh_name.split("/")[-1]  # skip the model prefix, e.g. val/my_mesh
                 geom_marker_msg.type = Marker.MESH_RESOURCE
-                geom_marker_msg.mesh_resource = f"package://dm_envs/meshes/{mesh_name}.stl"
+                geom_marker_msg.mesh_resource = f"package://regrasping_deformables/meshes/{mesh_name}.stl"
 
                 # We use body pos/quat here under the assumption that in the XML, the <geom type="mesh" ... />
                 #  has NO POS OR QUAT, but instead that info goes in the <body> tag
@@ -221,11 +221,3 @@ class MujocoVisualizer:
         # print(f"viz took {perf_counter() - t0:0.3f}")
 
 
-def visualize_vg(pub, vg, origin_point, res):
-    origin_point_viz = origin_point - res / 2
-    msg = VoxelgridStamped()
-    msg.header.frame_id = 'world'
-    msg.origin = msgify(Point, origin_point_viz.cpu().numpy())
-    msg.scale = float(res.cpu().numpy())
-    msg.occupancy = vox_to_float_array(vg)
-    pub.publish(msg)

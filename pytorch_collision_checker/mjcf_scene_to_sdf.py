@@ -11,8 +11,8 @@ from tqdm import tqdm
 
 import rospy
 import sdf_tools.utils_3d
-from pytorch_collision_checker.collision_visualizer import visualize_vg, MujocoVisualizer
-from pytorch_collision_checker.sdf import idx_to_point_from_origin_point, extent_to_env_shape, SDF
+from pytorch_collision_checker.collision_visualizer import MujocoVisualizer
+from pytorch_collision_checker.sdf import idx_to_point_from_origin_point, extent_to_env_shape, SDF, visualize_vg
 from rviz_voxelgrid_visuals_msgs.msg import VoxelgridStamped
 
 

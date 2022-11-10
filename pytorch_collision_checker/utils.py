@@ -45,4 +45,9 @@ def handle_batch_input(n):
     return _handle_batch_input
 
 def homogeneous_np(point):
+    def transform_direction(pose, v):
+        v_ = torch.cat([v, torch.zeros_like(v[..., 0:1])], dim=-1).unsqueeze(-1)
+        new_v = (pose @ v_)[..., :3, 0]
+        return new_v
+
     return np.concatenate([point, [1]], axis=-1)
