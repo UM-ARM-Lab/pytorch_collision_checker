@@ -1,6 +1,6 @@
 # PyTorch Collision Checking
 
-![logo](pytorch_collision_checking_logo.png | width=100)
+<img src="pytorch_collision_checking_logo.png" alt="logo" width="200px">
 
 depends on pytorch kinematics
 
