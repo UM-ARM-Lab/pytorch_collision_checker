@@ -42,7 +42,7 @@ def pairwise_distances(a):
 
     """
     a_sum_sqr = a.square().sum(dim=-1, keepdims=True)  # [b, n, 1]
-    dist = a_sum_sqr - 2 * torch.matmul(a, a.transpose(1, 2)) + a_sum_sqr.transpose(1, 2)  # [b, n, n]
+    dist = a_sum_sqr - 2 * torch.matmul(a, a.transpose(1, 2)) + a_sum_sqr.transpose(1, 2) + 1e-6  # [b, n, n]
     return dist.sqrt()
 
 
@@ -126,6 +126,7 @@ class CollisionChecker:
                                            link=Link(name=name, offset=offset),
                                            joint=joint))
         self.chain.precompute_fk_info()
+        self.sphere_names, self.sphere_indices = self.get_sphere_frame_names_and_indices()
 
     def make_sphere_frame_name(self, link_name, sphere_idx):
         name = f"{link_name}_sphere_{sphere_idx}"
@@ -134,7 +135,7 @@ class CollisionChecker:
     @handle_batch_input(n=2)
     def get_all_self_collision_pairs(self, joint_positions):
         sphere_positions = self.compute_sphere_positions(joint_positions)
-        in_self_collision = self.compute_self_distance_matrix(sphere_positions)
+        in_self_collision = self.compute_in_self_collision(sphere_positions)
         percentage_in_self_collision = in_self_collision.sum(dim=0) / in_self_collision.shape[0]
         a_indices, b_indices = torch.where(percentage_in_self_collision > 0.5)
         pairs = []
@@ -150,13 +151,21 @@ class CollisionChecker:
         return pairs
 
     @handle_batch_input(n=2)
-    def check_collision(self, joint_positions, return_all=False, transforms=None):
+    def self_penetration_cost(self, transforms):
+        sphere_positions = self.compute_sphere_positions_from_fk(transforms)
+        self_penetration_matrix = self.compute_self_penetration(sphere_positions)
+        self_penetration = self_penetration_matrix.sum(dim=-1).sum(dim=-1)
+        return self_penetration
+
+    @handle_batch_input(n=2)
+    def check_collision(self, joint_positions=None, return_all=False, transforms=None):
         """ If you've already computed the transforms via FK, you should pass it in instead of re-computing it """
         if transforms is None:
             sphere_positions = self.compute_sphere_positions(joint_positions)
         else:
             sphere_positions = self.compute_sphere_positions_from_fk(transforms)
-        in_self_collision = self.compute_self_distance_matrix(sphere_positions)
+
+        in_self_collision = self.compute_in_self_collision(sphere_positions)
         in_collision_any = in_self_collision.any(dim=2)
 
         if self.sdf is not None:
@@ -180,27 +189,42 @@ class CollisionChecker:
         return sphere_positions_sdf_frame
 
     @handle_batch_input(n=3)
-    def compute_self_distance_matrix(self, sphere_positions):
-        d_to_self = pairwise_distances(sphere_positions)
-        d_to_self_ignored = d_to_self + self.ignored_collision_matrix * 999
+    def compute_self_penetration(self, sphere_positions):
+        d_to_self_ignored = self.compute_self_distance_matrix(sphere_positions)
+        self_penetration = torch.relu(self.radii_matrix - d_to_self_ignored)
+        return self_penetration
+
+    @handle_batch_input(n=3)
+    def compute_in_self_collision(self, sphere_positions):
+        d_to_self_ignored = self.compute_self_distance_matrix(sphere_positions)
         in_self_collision = d_to_self_ignored < self.radii_matrix
         return in_self_collision
 
-    @handle_batch_input(n=2)
-    def compute_sphere_positions(self, joint_positions):
-        link_indices = torch.tensor(list(self.chain.frame_to_idx.values()), dtype=torch.long, device=self.device)
-        transforms = self.chain.forward_kinematics_fast(joint_positions, link_indices)
-        transforms_dict = {}
-        for link_name, transform in zip(self.chain.frame_to_idx.keys(), transforms):
-            transforms_dict[link_name] = transform
-        return self.compute_sphere_positions_from_fk(transforms_dict)
+    def compute_self_distance_matrix(self, sphere_positions):
+        d_to_self = pairwise_distances(sphere_positions)
+        d_to_self_ignored = d_to_self + self.ignored_collision_matrix * 999
+        return d_to_self_ignored
+
+    def get_sphere_frame_names_and_indices(self):
+        names = []
+        indices = []
+        for frame_name, idx in self.chain.frame_to_idx.items():
+            if 'sphere' in frame_name:
+                names.append(frame_name.replace("_frame", ""))
+                indices.append(idx)
+        return names, torch.tensor(indices, dtype=torch.long, device=self.device)
 
     @handle_batch_input(n=2)
+    def compute_sphere_positions(self, joint_positions):
+        transforms = self.chain.forward_kinematics_fast(joint_positions, self.sphere_indices)
+        transforms_dict = dict(zip(self.sphere_names, transforms))
+        return self.compute_sphere_positions_from_fk(transforms_dict)
+
     def compute_sphere_positions_from_fk(self, transforms):
         sphere_positions = []
         for link_name, spheres_for_link in self.spheres.items():
             for sphere_idx, sphere_for_link in enumerate(spheres_for_link):
-                sphere_frame_name = self.make_sphere_frame_name(link_name, sphere_idx) + '_frame'
+                sphere_frame_name = self.make_sphere_frame_name(link_name, sphere_idx)
                 t = transforms[sphere_frame_name]
                 sphere_positions.append(t[:, :3, 3])
         sphere_positions_vec = torch.stack(sphere_positions, dim=1)

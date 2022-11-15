@@ -30,6 +30,7 @@ class SDF:
         d_conv_cy = torch.conv3d(d, cy, padding='same')
         d_conv_cz = torch.conv3d(d, cz, padding='same')
         self.grad = torch.stack([d_conv_cx, d_conv_cy, d_conv_cz], dim=-1).squeeze(1)
+        self.penetration_grad = (self.sdf.unsqueeze(-1) <= 0) * self.grad
         print(f'dt to compute gradient: {perf_counter() - t0:.4f}')
 
     @handle_batch_input(n=2)
@@ -100,6 +101,7 @@ class SDF:
         other.origin_point = other.origin_point.to(dtype=dtype, device=device)
         other.res = other.res.to(dtype=dtype, device=device)
         other.grad = other.grad.to(dtype=dtype, device=device)
+        other.penetration_grad = other.penetration_grad.to(dtype=dtype, device=device)
         return other
 
     def clone(self):
