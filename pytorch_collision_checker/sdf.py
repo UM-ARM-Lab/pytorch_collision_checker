@@ -150,7 +150,7 @@ def extent_to_env_shape(extent, res):
 
 
 def visualize_vg(pub, vg, origin_point, res):
-    origin_point_viz = origin_point - res / 2
+    origin_point_viz = origin_point - res
     msg = VoxelgridStamped()
     msg.header.frame_id = 'world'
     msg.origin = msgify(Point, origin_point_viz)
