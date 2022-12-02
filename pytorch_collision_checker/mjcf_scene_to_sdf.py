@@ -14,7 +14,6 @@ import sdf_tools.utils_3d
 from pytorch_collision_checker.collision_visualizer import MujocoVisualizer
 from pytorch_collision_checker.sdf import idx_to_point_from_origin_point, extent_to_env_shape, SDF, visualize_vg
 from rviz_voxelgrid_visuals_msgs.msg import VoxelgridStamped
-from visualization_msgs.msg import Marker, MarkerArray
 
 
 def get_voxelgrid_from_filename(model_filename, res, extent, origin_point):
@@ -37,28 +36,8 @@ def get_voxelgrid(physics, res, extent, origin_point):
 
     geom_type = mujoco.mju_str2Type('geom')
 
-    marker_pub = rospy.Publisher("state_viz", MarkerArray)
-    marker_msg = Marker()
-    marker_msg.action = Marker.ADD
-    marker_msg.type = Marker.SPHERE
-    marker_msg.ns = 'cc'
-    marker_msg.pose.orientation.w = 1
-    marker_msg.color.a = 1
-    marker_msg.color.r = 1
-    marker_msg.scale.x = res
-    marker_msg.scale.y = res
-    marker_msg.scale.z = res
-    marker_msg.header.frame_id = 'world'
-
-    marker_array_msg = MarkerArray()
-    marker_array_msg.markers.append(marker_msg)
-
     def in_collision(xyz):
         physics.data.qpos[0:3] = xyz  # set the position, uses the "free joint" we made above
-        marker_array_msg.markers[0].pose.position.x = xyz[0]
-        marker_array_msg.markers[0].pose.position.y = xyz[1]
-        marker_array_msg.markers[0].pose.position.z = xyz[2]
-        marker_pub.publish(marker_array_msg)
 
         mujoco.mj_step1(physics.model.ptr, physics.data.ptr)  # call step to update collisions
         for i, c in enumerate(physics.data.contact):

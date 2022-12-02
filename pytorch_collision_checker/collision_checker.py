@@ -27,7 +27,15 @@ def load_model_and_cc(model_filename: pathlib.Path, sdf_filename: Optional[pathl
         chain = pk.build_chain_from_mjcf(model_filename.open().read())
     spheres = load_spheres(spheres_filename)
     chain = chain.to(dtype=dtype, device=device)
-    ignore = get_default_ignores(chain, spheres)
+    ignores_filename = model_filename.parent / f'{model_filename.stem}_ignore.pkl'
+    if ignores_filename.exists():
+        with ignores_filename.open("rb") as f:
+            ignore = pickle.load(f)
+    else:
+        ignore = get_default_ignores(chain, spheres)
+        print(f"Caching default ignores in {ignores_filename.as_posix()}")
+        with ignores_filename.open("wb") as f:
+            pickle.dump(ignore, f)
     cc = CollisionChecker(chain, spheres, sdf=sdf, ignore_collision_pairs=ignore, robot2sdf=robot2sdf)
     return cc
 
@@ -92,6 +100,8 @@ class CollisionChecker:
         self.ignored_collision_with_env_mask = torch.zeros(self.n_spheres, dtype=self.dtype, device=self.device)
         self.link_names = self.chain.get_link_names()
         self.n_spheres = self.radii.shape[0]
+        self.sphere_names = None
+        self.sphere_indices = None
         if robot2sdf is None:
             self.robot2sdf = None
         else:
@@ -126,7 +136,22 @@ class CollisionChecker:
                                            link=Link(name=name, offset=offset),
                                            joint=joint))
         self.chain.precompute_fk_info()
+        self.update_precomputed_indices()
+
+    def update_precomputed_indices(self):
+        """ You must call this method if you change the underlying Chain to add or remove frames! """
         self.sphere_names, self.sphere_indices = self.get_sphere_frame_names_and_indices()
+
+        n = 20
+        n_spheres = len(self.sphere_names)
+        self.joint_effects_sphere_matrix = torch.zeros([n_spheres, n], dtype=torch.bool, device=self.device)
+        for sphere_idx, (sphere_name, sphere_frame_idx) in enumerate(zip(self.sphere_names, self.sphere_indices)):
+            parent_idx = sphere_frame_idx
+            while parent_idx >= 0:
+                joint_idx = self.chain.joint_indices[parent_idx]
+                if joint_idx != -1:
+                    self.joint_effects_sphere_matrix[sphere_idx, joint_idx] = True
+                parent_idx = self.chain.parent_indices[parent_idx]
 
     def make_sphere_frame_name(self, link_name, sphere_idx):
         name = f"{link_name}_sphere_{sphere_idx}"
@@ -208,10 +233,11 @@ class CollisionChecker:
     def get_sphere_frame_names_and_indices(self):
         names = []
         indices = []
-        for frame_name, idx in self.chain.frame_to_idx.items():
-            if 'sphere' in frame_name:
-                names.append(frame_name.replace("_frame", ""))
-                indices.append(idx)
+        for link_name, spheres_for_link in self.spheres.items():
+            for sphere_idx, sphere_for_link in enumerate(spheres_for_link):
+                sphere_frame_name = self.make_sphere_frame_name(link_name, sphere_idx)
+                names.append(sphere_frame_name)
+                indices.append(self.chain.frame_to_idx[sphere_frame_name + '_frame'])
         return names, torch.tensor(indices, dtype=torch.long, device=self.device)
 
     @handle_batch_input(n=2)

@@ -35,7 +35,7 @@ class CollisionVisualizer:
         self.spheres_pub = rospy.Publisher('spheres', MarkerArray, queue_size=10)
         self.geoms_pub = rospy.Publisher('geoms', MarkerArray, queue_size=10)
 
-    def viz(self, sphere_positions, radii, label='', idx=0, color='k', highlight_indices=None, frame_id='world'):
+    def viz(self, sphere_positions, radii, label='', idx=0, color=None, highlight_indices=None, frame_id='world'):
         assert sphere_positions.ndim == 2
         assert radii.ndim == 1
         msg = MarkerArray()
@@ -44,7 +44,7 @@ class CollisionVisualizer:
             sphere_msg.scale.x = 2 * r
             sphere_msg.scale.y = 2 * r
             sphere_msg.scale.z = 2 * r
-            if color is None:
+            if color is not None:
                 sphere_msg.color = ColorRGBA(*to_rgba(color))
             else:
                 sphere_msg.color.r = 0.2
