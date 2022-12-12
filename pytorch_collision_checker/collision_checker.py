@@ -11,7 +11,8 @@ from moonshine.geometry_torch import transform_points_3d
 from pytorch_collision_checker.sdf import SDF
 from pytorch_collision_checker.utils import handle_batch_input
 from pytorch_kinematics import Chain, SerialChain, Transform3d
-from pytorch_kinematics.frame import Frame, Link, Joint
+from pytorch_kinematics.frame import Joint, Frame, Link
+from regrasping_deformables.sdf_autograd import sdf_lookup
 
 
 def load_model_and_cc(model_filename: pathlib.Path, sdf_filename: Optional[pathlib.Path], dtype, device, chain=None,
@@ -73,6 +74,19 @@ def get_radii(chain, spheres):
     return radii, repeats, sphere_idx_to_link_idx
 
 
+def make_sphere_frame_name(link_name, sphere_idx):
+    name = f"{link_name}_sphere_{sphere_idx}"
+    return name
+
+
+def sort_spheres_to_match_kinematics_order(chain, spheres):
+    spheres_sorted = {}
+    for link_idx, link_name in enumerate(chain.get_link_names()):
+        if link_name in spheres:
+            spheres_sorted[link_name] = spheres[link_name]
+    return spheres_sorted
+
+
 class CollisionChecker:
 
     def __init__(self, chain: Chain,
@@ -93,9 +107,9 @@ class CollisionChecker:
         self.chain = deepcopy(chain)
         self.dtype = self.chain.dtype
         self.device = self.chain.device
-        self.spheres = spheres
         self.sdf = sdf
         self.radii, self.repeats, self.sphere_idx_to_link_idx = get_radii(chain, spheres)
+        self.spheres = sort_spheres_to_match_kinematics_order(chain, spheres)
         self.n_spheres = self.radii.shape[0]
         self.ignored_collision_with_env_mask = torch.zeros(self.n_spheres, dtype=self.dtype, device=self.device)
         self.link_names = self.chain.get_link_names()
@@ -123,18 +137,15 @@ class CollisionChecker:
         radii_b = torch.transpose(radii_a, 1, 2)
         self.radii_matrix = radii_a + radii_b
 
-        self.link_names_for_spheres = []  # useful for debugging
         for link_name, spheres_for_link in spheres.items():
             link_frame = self.chain.find_frame(f"{link_name}_frame")
             for sphere_idx, sphere in enumerate(spheres_for_link):
                 pos = torch.tensor(sphere['position'], dtype=self.chain.dtype, device=self.chain.device)
-                name = self.make_sphere_frame_name(link_name, sphere_idx)
+                name = make_sphere_frame_name(link_name, sphere_idx)
                 offset = Transform3d(pos=pos, dtype=self.chain.dtype, device=self.chain.device)
                 joint = Joint(name=name, dtype=self.chain.dtype, device=self.chain.device, joint_type='fixed')
-                self.link_names_for_spheres.append(link_name)
-                link_frame.add_child(Frame(name=name + "_frame",
-                                           link=Link(name=name, offset=offset),
-                                           joint=joint))
+                link_frame.add_child(Frame(name=name + "_frame", link=Link(name=name, offset=offset), joint=joint))
+
         self.chain.precompute_fk_info()
         self.update_precomputed_indices()
 
@@ -142,7 +153,7 @@ class CollisionChecker:
         """ You must call this method if you change the underlying Chain to add or remove frames! """
         self.sphere_names, self.sphere_indices = self.get_sphere_frame_names_and_indices()
 
-        n = 20
+        n = len(self.chain.get_joint_parameter_names())
         n_spheres = len(self.sphere_names)
         self.joint_effects_sphere_matrix = torch.zeros([n_spheres, n], dtype=torch.bool, device=self.device)
         for sphere_idx, (sphere_name, sphere_frame_idx) in enumerate(zip(self.sphere_names, self.sphere_indices)):
@@ -152,10 +163,6 @@ class CollisionChecker:
                 if joint_idx != -1:
                     self.joint_effects_sphere_matrix[sphere_idx, joint_idx] = True
                 parent_idx = self.chain.parent_indices[parent_idx]
-
-    def make_sphere_frame_name(self, link_name, sphere_idx):
-        name = f"{link_name}_sphere_{sphere_idx}"
-        return name
 
     @handle_batch_input(n=2)
     def get_all_self_collision_pairs(self, joint_positions):
@@ -176,11 +183,22 @@ class CollisionChecker:
         return pairs
 
     @handle_batch_input(n=2)
+    def penetration_cost(self, transforms):
+        return self.self_penetration_cost(transforms) + self.env_penetration_cost(transforms)
+
+    @handle_batch_input(n=2)
     def self_penetration_cost(self, transforms):
         sphere_positions = self.compute_sphere_positions_from_fk(transforms)
         self_penetration_matrix = self.compute_self_penetration(sphere_positions)
         self_penetration = self_penetration_matrix.sum(dim=-1).sum(dim=-1)
         return self_penetration
+
+    @handle_batch_input(n=2)
+    def env_penetration_cost(self, transforms):
+        sphere_positions = self.compute_sphere_positions_from_fk(transforms)
+        env_penetration = self.compute_env_penetration(sphere_positions)
+        env_penetration = env_penetration.sum(dim=-1)
+        return env_penetration
 
     @handle_batch_input(n=2)
     def check_collision(self, joint_positions=None, return_all=False, transforms=None):
@@ -220,6 +238,18 @@ class CollisionChecker:
         return self_penetration
 
     @handle_batch_input(n=3)
+    def compute_env_penetration(self, sphere_positions):
+        if self.robot2sdf is not None:
+            sphere_positions_sdf_frame = self.positions_to_sdf_frame(sphere_positions)
+        else:
+            sphere_positions_sdf_frame = sphere_positions
+
+        d_to_env_differentiable = sdf_lookup(self.sdf, sphere_positions_sdf_frame)
+        d_to_env_masked = d_to_env_differentiable + (1000 * self.ignored_collision_with_env_mask)
+        env_penetration = torch.relu(self.radii - d_to_env_masked)
+        return env_penetration
+
+    @handle_batch_input(n=3)
     def compute_in_self_collision(self, sphere_positions):
         d_to_self_ignored = self.compute_self_distance_matrix(sphere_positions)
         in_self_collision = d_to_self_ignored < self.radii_matrix
@@ -235,7 +265,7 @@ class CollisionChecker:
         indices = []
         for link_name, spheres_for_link in self.spheres.items():
             for sphere_idx, sphere_for_link in enumerate(spheres_for_link):
-                sphere_frame_name = self.make_sphere_frame_name(link_name, sphere_idx)
+                sphere_frame_name = make_sphere_frame_name(link_name, sphere_idx)
                 names.append(sphere_frame_name)
                 indices.append(self.chain.frame_to_idx[sphere_frame_name + '_frame'])
         return names, torch.tensor(indices, dtype=torch.long, device=self.device)
@@ -250,20 +280,28 @@ class CollisionChecker:
         sphere_positions = []
         for link_name, spheres_for_link in self.spheres.items():
             for sphere_idx, sphere_for_link in enumerate(spheres_for_link):
-                sphere_frame_name = self.make_sphere_frame_name(link_name, sphere_idx)
+                sphere_frame_name = make_sphere_frame_name(link_name, sphere_idx)
                 t = transforms[sphere_frame_name]
                 sphere_positions.append(t[:, :3, 3])
         sphere_positions_vec = torch.stack(sphere_positions, dim=1)
         return sphere_positions_vec
 
-    def ignored_collision_with_env_for_sphere(self, link_name: str, per_link_sphere_idx: int):
+    def ignore_collision_with_env_for_sphere(self, link_name: str, per_link_sphere_idx: int):
+        full_sphere_idx = self.get_sphere_idx(link_name, per_link_sphere_idx)
+        self.ignored_collision_with_env_mask[full_sphere_idx] = 1
+
+    def unignore_collision_with_env_for_sphere(self, link_name: str, per_link_sphere_idx: int):
+        full_sphere_idx = self.get_sphere_idx(link_name, per_link_sphere_idx)
+        self.ignored_collision_with_env_mask[full_sphere_idx] = 0
+
+    def get_sphere_idx(self, link_name, per_link_sphere_idx):
         cumsum = torch.cumsum(self.repeats, dim=0)
         sphere_start_indices = cumsum - self.repeats
         sphere_end_indices = cumsum
         link_idx = self.link_names.index(link_name)
         sphere_indices_for_link = torch.arange(sphere_start_indices[link_idx], sphere_end_indices[link_idx])
         full_sphere_idx = sphere_indices_for_link[per_link_sphere_idx]
-        self.ignored_collision_with_env_mask[full_sphere_idx] = 1
+        return full_sphere_idx
 
     def link_name_for_sphere_idx(self, sphere_idx):
         return self.link_names[self.sphere_idx_to_link_idx[sphere_idx]]

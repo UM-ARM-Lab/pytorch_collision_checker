@@ -3,6 +3,7 @@ import argparse
 import pathlib
 import pickle
 
+import hjson
 import numpy as np
 import torch
 from dm_control import mjcf
@@ -58,9 +59,23 @@ def get_voxelgrid(physics, res, extent, origin_point):
 
 
 def mjcf_filename_to_sdf(model_filename, res, xmin, xmax, ymin, ymax, zmin, zmax):
-    outdir = model_filename.parent
     nickname = model_filename.stem
+    outdir = model_filename.parent.parent / 'sdfs'
+    outdir.mkdir(exist_ok=True)
     outfilename = outdir / (nickname + "_sdf.pkl")
+    args_filename = outdir / (nickname + "_sdf_args.txt")
+    args_dict = {
+        'model_filename': model_filename.as_posix(),
+        'res':            res,
+        'xmin':           xmin,
+        'xmax':           xmax,
+        'ymin':           ymin,
+        'ymax':           ymax,
+        'zmin':           zmin,
+        'zmax':           zmax,
+    }
+    with args_filename.open("w") as args_f:
+        hjson.dump(args_dict, args_f)
     origin_point = torch.tensor([xmin, ymin, zmin]) + res / 2  # center  of the voxel [0,0,0]
     res = torch.tensor([res])
     extent = np.array([xmin, xmax, ymin, ymax, zmin, zmax])

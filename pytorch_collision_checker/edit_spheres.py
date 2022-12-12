@@ -129,11 +129,17 @@ class EditSphere:
         if xyz_str == '':
             return
 
-        pos = np.fromstring(xyz_str, dtype=np.float, sep=', ')
+        pos_link_frame = np.fromstring(xyz_str, dtype=np.float, sep=', ')
+
+        link_name = item.parent().text(0)
+        sphere_idx = int(item.text(1))
+        t = self.transforms[link_name].get_matrix()[0]
+        pos_world_frame = (t @ homogeneous_np(pos_link_frame))[:3]
+
         pose = Pose()
-        pose.position.x = pos[0]
-        pose.position.y = pos[1]
-        pose.position.z = pos[2]
+        pose.position.x = pos_world_frame[0]
+        pose.position.y = pos_world_frame[1]
+        pose.position.z = pos_world_frame[2]
         self.i.set_pose(pose)
 
     def add_sphere_item_to_tree(self, parent_item, i, sphere):
@@ -211,7 +217,7 @@ class EditSphere:
 
         sphere = {
             'position': pos_link_frame,
-            'radius':   radius,
+            'radius':   round(radius, 3),
         }
         self.add_sphere_item_to_tree(parent_item, sphere_idx, sphere)
         with blocked(self.ui.radius_spinbox):
