@@ -115,7 +115,7 @@ class CollisionChecker:
         self.link_names = self.chain.get_link_names()
         self.n_spheres = self.radii.shape[0]
         self.sphere_names = None
-        self.sphere_indices = None
+
         if robot2sdf is None:
             self.robot2sdf = None
         else:
@@ -310,10 +310,7 @@ class CollisionChecker:
 def get_default_ignores(chain: Chain, spheres: Dict):
     cc = CollisionChecker(chain, spheres)
     n_config_samples = 1000
-    low, high = chain.get_joint_limits()
-    low = torch.tensor(low, dtype=chain.dtype, device=chain.device)
-    high = torch.tensor(high, dtype=chain.dtype, device=chain.device)
-    rng = torch.distributions.uniform.Uniform(low, high)
+    rng = torch.distributions.uniform.Uniform(chain.low, chain.high)
     joint_positions = rng.sample([n_config_samples])
     return cc.get_all_self_collision_pairs(joint_positions)
 
