@@ -13,6 +13,7 @@ setup(
         'torch',
         'numpy',
         'pytorch_kinematics',
+        'arm_pytorch_utilities',
     ],
     tests_require=[
         'pytest'
